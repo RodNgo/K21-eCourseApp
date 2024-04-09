@@ -1,7 +1,7 @@
-from rest_framework import viewsets, generics, status
+from rest_framework import viewsets, generics, parsers, status, permissions
 from rest_framework.decorators import action
 from courses import serializers, paginators
-from courses.models import Category, Course
+from courses.models import Category, Course, Lesson, User
 from rest_framework.response import Response
 
 
@@ -17,7 +17,6 @@ class CourseViewSet(viewsets.ViewSet, generics.ListAPIView):
 
     def get_queryset(self):
         queryset = self.queryset
-
 
         q = self.request.query_params.get('q')
         if q:
@@ -35,4 +34,34 @@ class CourseViewSet(viewsets.ViewSet, generics.ListAPIView):
         q = self.request.query_params.get('q')
         if q:
             lesson = lesson.filter(subject__icontains=q)
-        return Response(serializers.LessonSerializer(lesson, many=True).data, status=status.HTTP_200_OK)
+        return Response(serializers.LessonDetailsSerializer(lesson, many=True).data, status=status.HTTP_200_OK)
+
+class LessonViewSet(viewsets.ViewSet, generics.RetrieveAPIView):
+    queryset = Lesson.objects.prefetch_related('tags').filter(active=True)
+    serializers_class = serializers.LessonSerializer
+
+    def get_permissions(self):
+        if self.action in ['add_comment']:
+            return [permissions.IsAuthenticated()]\
+        return [permissions.AllowAny()]
+
+    @action(methods=['get'], url_path='comments', detail=True)
+    def get_comments(self, request, pk):
+        comments = self.get_object().comment_set.select_related('user').order_by("-id")
+        paginator = paginators.CommentPaginator()
+        page = paginator.paginate_queryset(comments, request)
+        if page is not None:
+            serializer = serializers.CommentSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        return Response(serializers.CommentSerializer(comments, many=True).data,
+                        status=status.HTTP_200_OK)
+
+    @action(methods=['post'], url_path='comments', detail=True)
+    def add_comments(self, request, pk):
+        c = self.get_object().comment_set.create(content=request.data.get('content'),user=request.user)
+
+class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
+    queryset = User.objects.filter(is_active=True)
+    serializer_class = serializers.UserSerializer
+    parser_classes = [parsers.MultiPartParser, ]
